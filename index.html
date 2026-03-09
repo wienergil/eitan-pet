@@ -280,6 +280,7 @@ const animals = [
   {
     name: "Rooster",
     wiki: "Rooster",
+    photoUrl: "https://images.unsplash.com/hqJauCVHpJg?w=700&q=85&fit=crop",
     fact: "Roosters start crowing before sunrise — they are nature's alarm clocks!",
     accent: "#c22828",
     sounds: [
@@ -289,7 +290,8 @@ const animals = [
   },
   {
     name: "Owl",
-    wiki: "Barn owl",
+    wiki: "Great_horned_owl",
+    photoUrl: "https://images.unsplash.com/NUK2OnZ4VQw?w=700&q=85&fit=crop",
     fact: "Owls can turn their heads 270 degrees — almost all the way around!",
     accent: "#7a5e32",
     sounds: [
@@ -325,35 +327,49 @@ async function fetchWikiImg(wikiTitle) {
 // Preload next animal's image in background
 function preloadNext(idx) {
   const a = animals[(idx + 1) % animals.length];
+  const src = a.photoUrl;
+  if (src) { const i=new Image(); i.src=src; return; }
   fetchWikiImg(a.wiki).then(src => { if(src) { const i=new Image(); i.src=src; } });
 }
 
 // ─── CARD RENDER ─────────────────────────────────────────────────────────────
-async function renderCard(card, idx) {
+// SYNC: sets HTML immediately so animation is never interrupted by a mid-flight DOM change
+function renderCard(card, idx) {
   const a = animals[idx];
   card.style.setProperty('--accent', a.accent);
 
   card.innerHTML = `
-    <div class="spinner" id="spin-${idx}"></div>
-    <img class="card-img loading" id="img-${idx}" alt="Real photo of a ${a.name}">
+    <div class="spinner"></div>
+    <img class="card-img loading" alt="Real photo of a ${a.name}">
     <div class="card-info">
       <div class="aname">${a.name}</div>
       <div class="afact">${a.fact}</div>
     </div>
   `;
 
-  const imgEl = card.querySelector('.card-img');
+  const imgEl   = card.querySelector('.card-img');
   const spinner = card.querySelector('.spinner');
 
-  const src = await fetchWikiImg(a.wiki);
-  if (src) {
-    imgEl.onload  = () => { imgEl.classList.remove('loading'); imgEl.classList.add('loaded'); spinner.remove(); };
-    imgEl.onerror = () => { spinner.remove(); imgEl.classList.add('loaded'); };
+  function applyImg(src) {
+    if (!src) {
+      spinner.remove();
+      imgEl.style.background = `linear-gradient(135deg, ${a.accent}22, ${a.accent}44)`;
+      imgEl.classList.replace('loading','loaded');
+      return;
+    }
+    imgEl.onload  = () => { spinner.remove(); imgEl.classList.replace('loading','loaded'); };
+    imgEl.onerror = () => { spinner.remove(); imgEl.classList.replace('loading','loaded'); };
     imgEl.src = src;
+  }
+
+  // If we already have the image URL (direct or cached), apply immediately
+  if (a.photoUrl) {
+    applyImg(a.photoUrl);
+  } else if (imgCache[a.wiki]) {
+    applyImg(imgCache[a.wiki]);
   } else {
-    spinner.remove();
-    imgEl.classList.add('loaded');
-    imgEl.style.background = `linear-gradient(135deg, ${a.accent}22, ${a.accent}44)`;
+    // Fetch in background — card HTML is already in the DOM, won't interrupt animation
+    fetchWikiImg(a.wiki).then(applyImg);
   }
 
   preloadNext(idx);
@@ -438,23 +454,32 @@ function go(dir) {
   stopSound();
 
   const card = document.getElementById('card');
+  // Clear any stale inline styles left over from drag so CSS classes drive cleanly
+  card.style.transform  = '';
+  card.style.transition = '';
+
   card.classList.add('anim', dir > 0 ? 'fl' : 'fr');
 
   setTimeout(() => {
     cur = (cur + dir + animals.length) % animals.length;
     updDots();
 
+    // Remove fly-out, position card off the opposite side (no transition)
     card.classList.remove('fl','fr','anim');
-    card.classList.add(dir>0 ? 'er' : 'el');
+    card.style.transform  = '';
+    card.style.transition = '';
+    card.classList.add(dir > 0 ? 'er' : 'el');
 
-    renderCard(card, cur); // async, won't block animation
+    // Render new content synchronously NOW — before the enter animation fires
+    renderCard(card, cur);
 
+    // Double rAF ensures browser has painted the off-screen position before sliding in
     requestAnimationFrame(() => requestAnimationFrame(() => {
       card.classList.add('anim','ec');
       card.classList.remove('er','el');
-      setTimeout(() => { card.classList.remove('anim','ec'); busy=false; }, 400);
+      setTimeout(() => { card.classList.remove('anim','ec'); busy = false; }, 420);
     }));
-  }, 360);
+  }, 370);
 }
 
 // ─── TOUCH / MOUSE SWIPE ─────────────────────────────────────────────────────
@@ -470,9 +495,10 @@ function onMove(x,y){
   cardEl.style.transform=`translateX(${dx}px) rotate(${dx*.065}deg)`;
 }
 function onEnd(){
-  if(!dragging)return; dragging=false; cardEl.style.transition='';
-  if(dx<-60) go(1);
-  else if(dx>60) go(-1);
+  if(!dragging)return; dragging=false;
+  cardEl.style.transition='';
+  if(dx<-60) { cardEl.style.transform=''; go(1); }
+  else if(dx>60) { cardEl.style.transform=''; go(-1); }
   else { cardEl.style.transition='transform .3s ease'; cardEl.style.transform=''; setTimeout(()=>cardEl.style.transition='',310); }
 }
 
